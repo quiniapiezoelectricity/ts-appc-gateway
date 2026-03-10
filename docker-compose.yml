@@ -1,0 +1,306 @@
+services:
+
+  # ============================================================
+  # appc-config-render (init)
+  # Renders all runtime configs from templates + env vars.
+  # Exits 0 on success. All other services wait for it.
+  # ============================================================
+  appc-config-render:
+    container_name: appc-config-render
+    build: ./config-render
+    cap_drop: [ALL]
+    read_only: true
+    environment:
+      INGRESS_IP: ${INGRESS_IP}
+      TPROXY_PORT: ${TPROXY_PORT:-10443}
+      DNS_UPSTREAM_TLS: ${DNS_UPSTREAM_TLS:-yes}
+      DNS_UPSTREAM_FORWARDERS: ${DNS_UPSTREAM_FORWARDERS:-1.1.1.1@853#cloudflare-dns.com,8.8.8.8@853#dns.google}
+      SKIP_HAPROXY_RENDER: ${SKIP_HAPROXY_RENDER:-}
+      SKIP_DNSMASQ_RENDER: ${SKIP_DNSMASQ_RENDER:-}
+      SKIP_UNBOUND_RENDER: ${SKIP_UNBOUND_RENDER:-}
+      SKIP_SNI_ENFORCEMENT: ${SKIP_SNI_ENFORCEMENT:-}
+      EXTRA_DENY_CIDRS: ${EXTRA_DENY_CIDRS:-}
+      EGRESS_ACCEPT_FAMILY: ${EGRESS_ACCEPT_FAMILY:-ipv4}
+      EGRESS_PREFER_FAMILY: ${EGRESS_PREFER_FAMILY:-ipv4}
+    volumes:
+      - ./templates:/templates:ro
+      - ./config:/config
+      - appc-run:/run/appc
+    restart: "no"
+
+  # ============================================================
+  # appc-dns-upstream (Unbound)
+  # Real upstream resolver. Used by HAProxy to resolve SNI
+  # hostnames to actual destination IPs, and by dnsmasq-steer
+  # for Tailscale infrastructure domains.
+  # Shares Tailscale's network namespace — listens on
+  # 127.0.0.1:5353, reachable only from within the netns.
+  # ============================================================
+  appc-dns-upstream:
+    container_name: appc-dns-upstream
+    build: ./dns-upstream
+    command: ["unbound", "-d", "-c", "/config/unbound.conf"]
+    network_mode: service:appc-ts
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /var/run
+      - /tmp
+    volumes:
+      - ./config:/config:ro
+    depends_on:
+      appc-ts:
+        condition: service_healthy
+      appc-config-render:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 5353"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # appc-ts (Tailscale)
+  # Subnet router + App Connector node.
+  # Advertises all INGRESS_IP CIDRs as subnet routes.
+  # INGRESS_IP is already CIDR-formatted (/32 or /128), so it
+  # passes directly to --advertise-routes without transformation.
+  # --advertise-connector enables App Connector peerapi DNS:
+  #   client DNS queries for admin-console-configured domains
+  #   arrive via peerapi → resolved by appc-dns-steer (sidecar
+  #   in this netns on 127.0.0.1:53) → returns INGRESS_IP.
+  #   Tailscale grant tcp:53/udp:53 to tag:connector routes
+  #   directly to dnsmasq since it shares this network namespace.
+  # ============================================================
+  appc-ts:
+    container_name: appc-ts
+    image: ${TS_IMAGE:-tailscale/tailscale:v1.94.2}
+    cap_drop: [ALL]
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_HOSTNAME: ${TS_HOSTNAME:-appc-gateway}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+      TS_EXTRA_ARGS: "--accept-dns=false --advertise-connector --advertise-routes=${INGRESS_IP}"
+      # Authenticate once on first boot only. On restart with existing state,
+      # Tailscale reconnects the existing node without consuming the auth key.
+      # Without this, every restart creates a duplicate node in the admin console.
+      TS_AUTH_ONCE: "true"
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+    env_file:
+      # Optional Tailscale debug envknobs (TS_DEBUG_*). Copy tailscale-debug.env.example
+      # to tailscale-debug.env and uncomment desired knobs. File absence is a no-op.
+      # Requires Compose v2.24+. Restart the full stack after any change.
+      - path: ./tailscale-debug.env
+        required: false
+    volumes:
+      # Bind mount so state is visible on the host and easy to wipe:
+      #   rm -rf ./ts-state/   → forces fresh authentication on next start
+      - ./ts-state:/var/lib/tailscale
+      - ts-socket:/var/run/tailscale
+    dns:
+      # dnsmasq-steer runs as a sidecar in this netns, so localhost is the
+      # split-horizon resolver. Tailscale uses bootstrap IPs to reach its
+      # control plane during the brief window before dnsmasq starts.
+      - 127.0.0.1
+    devices:
+      # Required for TS_USERSPACE=false (kernel TUN networking).
+      # NET_ADMIN grants permission but doesn't expose the device file;
+      # without this tailscale0 never appears and the stack deadlocks.
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv6.conf.all.forwarding=1
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    depends_on:
+      appc-config-render:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ============================================================
+  # appc-dns-steer (dnsmasq)
+  # Sidecar in Tailscale's network namespace. Split-horizon:
+  # returns INGRESS_IP for all domains except Tailscale
+  # infrastructure (forwarded to Unbound for real answers).
+  # Listens on 0.0.0.0:53 within the Tailscale netns, so the
+  # Tailscale grant tcp:53/udp:53 to tag:connector routes
+  # peerapi DNS queries directly here.
+  # ============================================================
+  appc-dns-steer:
+    container_name: appc-dns-steer
+    build: ./dns-steer
+    command: ["dnsmasq", "--conf-file=/config/dnsmasq-steer.conf", "--no-daemon"]
+    network_mode: service:appc-ts
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    read_only: true
+    tmpfs:
+      - /var/run
+      - /tmp
+    volumes:
+      - ./config:/config:ro
+    depends_on:
+      appc-ts:
+        condition: service_healthy
+      appc-config-render:
+        condition: service_completed_successfully
+      appc-dns-upstream:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 53"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # appc-interception
+  # Applies TPROXY nftables rules inside Tailscale's network
+  # namespace, then watches tailscale0. Runs as a sidecar with
+  # restart: unless-stopped so rules are re-applied if Tailscale
+  # restarts (new netns → interception loses network → restarts
+  # → re-applies rules).
+  # ============================================================
+  appc-interception:
+    container_name: appc-interception
+    build: ./interception
+    network_mode: service:appc-ts
+    privileged: true
+    environment:
+      INGRESS_IP: ${INGRESS_IP}
+      TPROXY_PORT: ${TPROXY_PORT:-10443}
+    depends_on:
+      appc-ts:
+        condition: service_healthy
+      appc-config-render:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "nft list chain inet appc_tproxy prerouting >/dev/null 2>&1 && ip link show tailscale0 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ============================================================
+  # appc-proxy (HAProxy)
+  # Shares Tailscale's network namespace. TPROXY listener accepts
+  # TCP connections intercepted by appc-interception.
+  # Reads SNI from TLS ClientHello, resolves real destination via
+  # appc-dns-upstream (Unbound), and forwards the TCP stream.
+  #
+  # proxy/start.sh is a watchdog wrapper: starts HAProxy and exits
+  # when tailscale0 disappears (appc-ts restarted = stale netns),
+  # letting Docker's restart: unless-stopped re-attach to the new
+  # netns. No Docker socket needed for this recovery path.
+  # ============================================================
+  appc-proxy:
+    container_name: appc-proxy
+    image: ${HAPROXY_IMAGE:-haproxy:3.2.14-alpine}
+    network_mode: service:appc-ts
+    # TPROXY requires IP_TRANSPARENT on the listening socket.
+    # setsockopt(IP_TRANSPARENT) needs root — the stock haproxy image
+    # runs as the unprivileged 'haproxy' user which silently fails.
+    user: root
+    cap_drop: [ALL]
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    read_only: true
+    tmpfs:
+      - /var/run
+      - /tmp
+    volumes:
+      - ./config:/config:ro
+      - appc-run:/run/appc
+      - ./proxy/start.sh:/usr/local/bin/appc-start.sh:ro
+    # Run the watchdog wrapper instead of HAProxy directly.
+    # docker-entrypoint.sh exec's its args, so the wrapper becomes PID 1.
+    command: ["sh", "/usr/local/bin/appc-start.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q tailscale0 /proc/net/dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      appc-interception:
+        condition: service_healthy
+      appc-config-render:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ============================================================
+  # appc-policy-sync
+  # Reads App Connector domain assignments from Tailscale's
+  # LocalAPI status JSON and generates HAProxy ACL files:
+  #   - SNI allowlist (exact + wildcard)
+  #   - deny-cidrs (DNS rebinding protection)
+  # Updates HAProxy's in-memory ACLs via runtime stats socket.
+  # ============================================================
+  appc-policy-sync:
+    container_name: appc-policy-sync
+    build: ./policy-sync
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      POLICY_SYNC_INTERVAL: ${POLICY_SYNC_INTERVAL:-30}
+      CONNECTOR_TAG: ${CONNECTOR_TAG:-}
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      EXTRA_DENY_CIDRS: ${EXTRA_DENY_CIDRS:-}
+    volumes:
+      - ts-socket:/var/run/tailscale:ro
+      - appc-run:/run/appc
+    depends_on:
+      appc-ts:
+        condition: service_healthy
+      appc-config-render:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(cat /run/appc/.sync-heartbeat 2>/dev/null || echo 0) )) -lt $$(( $${POLICY_SYNC_INTERVAL:-30} * 3 ))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    restart: unless-stopped
+
+  # ============================================================
+  # appc-autoheal (tools profile — not started by default)
+  # Mounts /var/run/docker.sock (root-equivalent host access).
+  # Not needed for normal proxy recovery — proxy/start.sh handles
+  # the stale-netns case via self-exit + restart: unless-stopped.
+  # Enable with: docker compose --profile tools up -d appc-autoheal
+  # Only use this for lab/development environments.
+  # ============================================================
+  appc-autoheal:
+    container_name: appc-autoheal
+    image: ${AUTOHEAL_IMAGE:-willfarrell/autoheal:1.2.0}
+    profiles: [tools]
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 5
+      AUTOHEAL_START_PERIOD: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  ts-socket:
+  appc-run:
+
+# Docker Engine 27+ auto-allocates a ULA IPv6 subnet for user-defined
+# bridge networks when enable_ipv6: true is set and no subnet is specified.
+# Required for EGRESS_ACCEPT_FAMILY=dual or ipv6 to work correctly.
+networks:
+  default:
+    enable_ipv6: true

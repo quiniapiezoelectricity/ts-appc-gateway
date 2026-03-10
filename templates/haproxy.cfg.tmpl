@@ -1,0 +1,93 @@
+global
+    log stdout format raw local0 info
+    maxconn 4096
+${DNS_ACCEPT_FAMILY_DIRECTIVE}
+    stats socket /run/appc/haproxy.sock mode 660 level admin expose-fd listeners
+
+defaults
+    mode tcp
+    log global
+    option logasap
+    # Structured log line per connection — enterprise-readable:
+    # client IP:port, SNI hostname, resolved destination IP:port,
+    # wait/connect/total time ms, bytes transferred, session status.
+    log-format "%ci:%cp [%t] %ft/%b sni=%[var(sess.sni)] dst=%[var(sess.resolved_ip)]:%[var(sess.orig_port)] tw=%Tw tc=%Tc tt=%Tt bytes=%B status=%ts"
+    timeout connect 10s
+    timeout client  30s
+    timeout server  30s
+    timeout tunnel  1h
+
+# ----------------------------------------------------------------
+# Upstream DNS resolver — Unbound, NOT the steering resolver.
+# HAProxy uses this to resolve SNI hostnames to real destination IPs.
+# Critical: this must NOT point at dnsmasq-steer, which returns
+# INGRESS_IP for all non-Tailscale domains and would cause a loop.
+# ----------------------------------------------------------------
+resolvers upstream_dns
+    nameserver unbound 127.0.0.1:5353
+    accepted_payload_size 8192
+    timeout retry 1s
+    timeout resolve 2s
+    hold valid   10s
+    hold other   10s
+    hold nx      10s
+    hold refused 10s
+    hold timeout 10s
+    resolve_retries 3
+
+# ----------------------------------------------------------------
+# TPROXY listener
+# Accepts TCP connections redirected by the interception container.
+# The transparent keyword + IP_TRANSPARENT socket option allows
+# HAProxy to bind to addresses it does not own (INGRESS_IP).
+# TPROXY delivers connections with the original destination
+# IP:port preserved — dst_port returns the real destination port.
+# ----------------------------------------------------------------
+frontend tls_in
+${TPROXY_BIND_LINES}
+    tcp-request inspect-delay 5s
+    # Capture the original client destination port from the transparent
+    # frontend socket before any backend processing occurs.
+    tcp-request connection set-var(sess.orig_port) fc_dst_port
+    tcp-request content set-var(sess.sni) req.ssl_sni,lower if { req.ssl_hello_type 1 } { req.ssl_sni -m found }
+${SNI_ENFORCEMENT}
+    tcp-request content do-resolve(sess.resolved_ip,upstream_dns${DO_RESOLVE_FAMILY_ARG}) var(sess.sni) if { req.ssl_hello_type 1 } { var(sess.sni) -m found }
+    default_backend sni_router
+
+# ----------------------------------------------------------------
+# FUTURE QUIC HOOK
+# UDP to INGRESS_IP is already TPROXY'd by interception, but
+# Community HAProxy has no plain `udp4@` frontend — `udp@` bind is
+# only valid in log-forward sections; generic UDP proxying requires
+# HAProxy Enterprise. The only UDP path in Community is QUIC/HTTP3
+# via `quic4@`, which requires a TLS certificate for the handshake.
+# Until a cert is available, UDP datagrams are silently dropped.
+# For UDP visibility without a cert, use netfilter LOG/NFLOG or
+# a dedicated sidecar (tcpdump, ulogd2, or a small Go/Python daemon).
+#
+# When QUIC/HTTP3 support is needed:
+#   1. Mount a wildcard cert at /config/tls.pem
+#   2. Add: frontend quic_in
+#              bind quic4@0.0.0.0:${TPROXY_PORT} transparent ssl crt /config/tls.pem
+#              log-format "%ci:%cp [%t] QUIC sni=%[ssl_fc_sni] dst=%[dst]:%[dst_port]"
+#              default_backend quic_router
+# ----------------------------------------------------------------
+
+# ----------------------------------------------------------------
+# SNI-based routing backend
+# Post-resolution IP validation rejects dangerous destinations
+# (DNS rebinding protection). Static base from config-render,
+# dynamically extended with node's own Tailscale IPs by policy-sync.
+# ----------------------------------------------------------------
+backend sni_router
+    acl has_sni var(sess.sni) -m found
+    acl has_dst var(sess.resolved_ip) -m found
+    acl valid_orig_dst_port var(sess.orig_port) -m int gt 0
+    acl deny_dst var(sess.resolved_ip) -m ip -f /run/appc/deny-cidrs.acl
+    tcp-request content reject if !has_sni
+    tcp-request content reject if !has_dst
+    tcp-request content reject if !valid_orig_dst_port
+    tcp-request content reject if deny_dst
+    tcp-request content set-dst     var(sess.resolved_ip)
+    tcp-request content set-dst-port var(sess.orig_port)
+    server fwd 0.0.0.0:0

@@ -8,6 +8,7 @@ on:
       - '.env.example'
       - 'tailscale-debug.env.example'
     tags: ['v*']
+  workflow_dispatch:
 
 permissions:
   contents: read

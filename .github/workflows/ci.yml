@@ -12,6 +12,7 @@ on:
       - '**.md'
       - '.env.example'
       - 'tailscale-debug.env.example'
+  workflow_dispatch:
 
 permissions:
   contents: read

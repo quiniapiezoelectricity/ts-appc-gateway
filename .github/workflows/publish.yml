@@ -3,6 +3,10 @@ name: Publish images
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.env.example'
+      - 'tailscale-debug.env.example'
     tags: ['v*']
 
 permissions:

@@ -2,8 +2,16 @@ name: CI
 
 on:
   pull_request:
+    paths-ignore:
+      - '**.md'
+      - '.env.example'
+      - 'tailscale-debug.env.example'
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - '.env.example'
+      - 'tailscale-debug.env.example'
 
 permissions:
   contents: read

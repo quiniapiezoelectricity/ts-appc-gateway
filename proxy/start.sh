@@ -8,6 +8,7 @@ set -e
 
 # Forward SIGTERM/SIGINT to HAProxy so `docker stop` triggers a clean shutdown
 # instead of relying on Docker's forced-kill timeout.
+# shellcheck disable=SC2329  # _cleanup is invoked via trap, not a direct call
 _cleanup() {
     kill "${_pid}" 2>/dev/null || true
     wait "${_pid}" 2>/dev/null || true

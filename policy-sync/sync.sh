@@ -1,4 +1,5 @@
 #!/bin/sh
+# shellcheck disable=SC3043  # 'local' is a busybox ash extension; this script targets Alpine only
 set -e
 
 # ================================================================

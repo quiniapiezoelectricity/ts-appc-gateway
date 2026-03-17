@@ -6,7 +6,7 @@ TPROXY_PORT=${TPROXY_PORT:-10443}
 TPROXY_MARK=1
 TPROXY_TABLE=100
 
-: ${INGRESS_IP:?INGRESS_IP is required}
+: "${INGRESS_IP:?INGRESS_IP is required}"
 # INGRESS_IP is a comma-delimited list of host CIDRs (/32 or /128).
 # config-render validates and rejects whitespace before this container starts.
 

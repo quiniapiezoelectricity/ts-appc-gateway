@@ -10,7 +10,7 @@ CONFIG=/config
 # from the suffix. Bare IPs and other prefix lengths are rejected.
 # Sets: INGRESS_HAS_IPV4, INGRESS_HAS_IPV6, INGRESS_V4_HOSTS, INGRESS_V6_HOSTS
 # ----------------------------------------------------------------
-: ${INGRESS_IP:?INGRESS_IP is required (e.g. 10.99.0.1/32 or 10.99.0.1/32,fd00::1/128)}
+: "${INGRESS_IP:?INGRESS_IP is required (e.g. 10.99.0.1/32 or 10.99.0.1/32,fd00::1/128)}"
 case "${INGRESS_IP}" in
     *' '*|*'	'*)
         echo "ERROR: INGRESS_IP must not contain whitespace — use comma-only separators: 10.99.0.1/32,fd00::1/128" >&2
@@ -189,6 +189,7 @@ fi
 if [ -n "${SKIP_HAPROXY_RENDER}" ]; then
     echo "    [skip] haproxy.cfg (SKIP_HAPROXY_RENDER set)"
 else
+    # shellcheck disable=SC2016  # single quotes are intentional: envsubst needs literal ${VAR} syntax
     envsubst '${TPROXY_BIND_LINES} ${TPROXY_PORT} ${SNI_ENFORCEMENT} ${DNS_ACCEPT_FAMILY_DIRECTIVE} ${DO_RESOLVE_FAMILY_ARG}' \
       < ${TEMPLATES}/haproxy.cfg.tmpl \
       > ${CONFIG}/haproxy.cfg
@@ -201,6 +202,7 @@ fi
 if [ -n "${SKIP_DNSMASQ_RENDER}" ]; then
     echo "    [skip] dnsmasq-steer.conf (SKIP_DNSMASQ_RENDER set)"
 else
+    # shellcheck disable=SC2016  # single quotes are intentional: envsubst needs literal ${VAR} syntax
     envsubst '${DNSMASQ_ADDRESS_LINES}' \
       < ${TEMPLATES}/dnsmasq-steer.conf.tmpl \
       > ${CONFIG}/dnsmasq-steer.conf
@@ -213,6 +215,7 @@ fi
 if [ -n "${SKIP_UNBOUND_RENDER}" ]; then
     echo "    [skip] unbound.conf (SKIP_UNBOUND_RENDER set)"
 else
+    # shellcheck disable=SC2016  # single quotes are intentional: envsubst needs literal ${VAR} syntax
     envsubst '${DNS_UPSTREAM_TLS} ${DNS_UPSTREAM_FORWARD_ADDRS}' \
       < ${TEMPLATES}/unbound.conf.tmpl \
       > ${CONFIG}/unbound.conf

@@ -40,12 +40,13 @@ This design uses proxy-style destination selection rather than Tailscale's nativ
 
 ## Status
 
-**Technical preview** for controlled internal deployments. Plain HTTP, QUIC/HTTP3, and same-node exit-node operation are out of scope for this design. See *Currently validated* for the concrete test envelope.
+**Technical preview** for controlled internal deployments. QUIC/HTTP3 and same-node exit-node operation are out of scope for this design. Plain HTTP (port 80) and metrics are not yet implemented. See *Currently validated* for the concrete test envelope.
 
 **Support boundary:**
 - Standard: Tailscale ACLs, tags, and App Connector control plane — all stock Tailscale behavior
 - Repo-specific: DNS steering, TPROXY interception, SNI routing, and policy-sync
-- Unsupported: same-node exit node, QUIC/HTTP3, plain HTTP (port 80), macOS/Windows host
+- Unsupported: same-node exit node, QUIC/HTTP3
+- Not yet implemented: plain HTTP (port 80), metrics/observability
 
 ## Architecture
 
@@ -83,9 +84,9 @@ Seven services:
 
 Requires Docker Compose v2.24+ (`condition: service_completed_successfully`, `env_file[].required`). Docker Engine 27+ is required for automatic IPv6 subnet allocation on user-defined bridge networks when `enable_ipv6: true` is set without an explicit subnet — needed for dual-stack egress to work without daemon-level IPv6 config. See [Docker Engine 27 release notes](https://docs.docker.com/engine/release-notes/27/).
 
-### Linux host
+### Docker host
 
-TPROXY requires Linux kernel support. This stack does not run on macOS or Windows.
+Requires a Linux kernel runtime. Native Linux is the intended deployment target. Docker Desktop on macOS/Windows may work for development and testing — containers run inside a Linux VM, so the kernel features this stack needs (`/dev/net/tun`, `NET_ADMIN`/`NET_RAW`, nftables TPROXY) are available. Host/VM networking behavior differs from native Linux and is not the primary supported production path.
 
 **Public IP:** Tailscale's [official setup guidance](https://tailscale.com/kb/1342/how-app-connectors-work) expects a publicly accessible IP on the connector device. Direct WireGuard path, lowest latency, simplest support posture. Follow this for production deployments wherever possible.
 
@@ -210,7 +211,7 @@ INGRESS_IP=2001:db8::1/128
 
 **No whitespace.** `INGRESS_IP=10.99.0.1/32, 2001:db8::1/128` (space after comma) is rejected at startup with a clear error. Use comma-only separators.
 
-**Uniqueness.** Every gateway on the same tailnet must use a distinct ingress address set. If two gateways advertise the same `/32` or `/128`, Tailscale routes connections to whichever wins the route advertisement — which may not be the one that answered the DNS query. That gateway has no record of the assignment; the connection fails silently.
+**Uniqueness.** Gateways on the same tailnet should use distinct ingress address sets unless you are deliberately running equivalent gateways — same App Connector scope, same SNI policy, same expected upstream behavior, and regionally co-located or covered by Tailscale's regional App Connector routing. The problem is uncoordinated overlap: if two gateways advertise the same `/32` or `/128` with divergent scopes, Tailscale routes to whichever wins the route advertisement with no guarantee it matches the one that answered the DNS query. That gateway has no record of the assignment; the connection fails silently.
 
 **Non-overlap.** Check `tailscale status --json | jq '.Peer[].AllowedIPs'` for existing routes before choosing. An ingress address that overlaps an existing subnet route will silently steal traffic from that route.
 
@@ -416,7 +417,7 @@ The following have been validated through manual testing. This repo does not yet
 
 ### Protocol limitations
 
-- **TLS/SNI only.** Plain HTTP (port 80) and non-TLS protocols are not intercepted. Connections without a TLS ClientHello are rejected by HAProxy.
+- **TLS/SNI only.** Plain HTTP (port 80) is not yet implemented. Connections without a TLS ClientHello are rejected by HAProxy. See *Future expansion*.
 - **No QUIC/HTTP3.** UDP to `INGRESS_IP` is TPROXY'd by `appc-interception` but silently dropped. Community HAProxy has no plain UDP frontend (`udp4@` bind is only valid in `log-forward` sections; generic UDP proxying requires HAProxy Enterprise). QUIC/HTTP3 is possible via `quic4@` but requires a TLS certificate. The TPROXY plumbing and a hook comment are already in `haproxy.cfg.tmpl`.
 - **Single ingress address bucket.** All steered domains resolve to the same `INGRESS_IP` address(es). Per-domain routing is SNI-based at the proxy, not IP-based at the network layer.
 
@@ -425,7 +426,7 @@ The following have been validated through manual testing. This repo does not yet
 - **Cold-start deny-all.** On first boot, SNI ACL files are empty until policy-sync populates them. All TLS connections are rejected during this window (typically < 30s). Fail-closed by design — set `SKIP_SNI_ENFORCEMENT=1` if this is unacceptable during initial rollout.
 - **Tailscale restart gap.** If `appc-ts` restarts, all shared-netns services (`appc-interception`, `appc-proxy`, `appc-dns-steer`, `appc-dns-upstream`) lose their network namespace reference. `appc-interception` and `appc-proxy` detect this via watchdog and self-exit, triggering Docker's `restart: unless-stopped`. `appc-dns-steer` and `appc-dns-upstream` rely on Docker's own restart policy without active detection — there is a brief window where DNS and proxy are unavailable.
 - **Same-node exit node incompatibility.** Using this gateway node as a Tailscale exit node simultaneously is unsupported. The catch-all DNS steering returns `INGRESS_IP` for all domains — this conflicts with the full-tunnel DNS resolution expected of an exit node and will break generic internet routing.
-- **Linux only.** TPROXY requires Linux kernel support. Does not run on macOS or Windows.
+- **Linux kernel required.** Native Linux is the intended deployment target. Docker Desktop on macOS/Windows may work for development — containers run inside a Linux VM — but host/VM networking differences make it not the primary supported production path.
 - **`appc-interception` CI coverage is shellcheck only.** nftables TPROXY setup requires a live Linux host with `CAP_NET_ADMIN` — it cannot be validated in standard CI environments.
 
 ## Operator overrides
@@ -459,7 +460,7 @@ When `tailscale-debug.env` is absent, `appc-ts` starts normally with no effect o
 These knobs are part of Tailscale's internal debug interface, not a stable public API. Names and behavior may change across Tailscale releases. Not recommended for normal deployments. To inspect active knobs:
 
 ```sh
-docker compose exec appc-ts env | grep '^TS_DEBUG_'
+docker compose exec -T appc-ts sh -c 'env | grep "^TS_DEBUG_" || true'
 ```
 
 ## Future expansion

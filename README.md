@@ -25,7 +25,7 @@ This stack uses DNS steering to deliver all configured-domain traffic to one or 
 
 | Stock App Connector behavior | This repo |
 |---|---|
-| Discovers destination IPs from DNS, then advertises subnet routes to those IPs | DNS steers all traffic to one or more ingress addresses; HAProxy reads TLS SNI and resolves the real destination per-connection |
+| Discovers destination IPs from DNS, then advertises subnet routes to those IPs | DNS steers traffic for connector-assigned domains to one or more ingress addresses; HAProxy reads TLS SNI and resolves the real destination per-connection |
 | No application-layer hostname visibility post-routing | Hostname visible at the proxy layer; SNI allowlist enforced per connection |
 
 **Where this repo diverges from Tailscale's documented guidance**
@@ -74,7 +74,7 @@ Seven services:
 | `appc-ts` | Tailscale subnet router + App Connector node. |
 | `appc-dns-steer` | dnsmasq. Split-horizon resolver; returns `INGRESS_IP` for all steered domains. |
 | `appc-dns-upstream` | Unbound. Real upstream resolver used only by HAProxy for egress resolution. |
-| `appc-interception` | Applies TPROXY nftables rules in Tailscale's network namespace. |
+| `appc-interception` | Applies TPROXY nftables rules in Tailscale's network namespace for traffic destined for `INGRESS_IP`. |
 | `appc-proxy` | HAProxy. TPROXY listener, SNI extraction, upstream forwarding. |
 | `appc-policy-sync` | Reads domain assignments from Tailscale LocalAPI; generates SNI allowlist + deny-cidrs ACLs. |
 
@@ -205,7 +205,7 @@ The following is a repo-tested policy shape. It differs from Tailscale's stock e
 
 Generate an auth key tagged with `tag:connector` for `TS_AUTHKEY`.
 
-The `domains` list controls which domains Tailscale clients route through this connector. The connector does not maintain a local domain list — it returns `INGRESS_IP` for everything it receives, and the admin console is the sole source of truth for domain assignments.
+The `domains` list controls which domains Tailscale clients route through this connector. The connector does not maintain a local domain list — dnsmasq-steer returns `INGRESS_IP` for every domain query the App Connector routes to it, and the admin console is the sole source of truth for domain assignments.
 
 ## Ingress addressing
 
@@ -248,7 +248,7 @@ Also avoid `fd7a:115c:a1e0::/48` (Tailscale's own address space) and `fe80::/10`
 
 Two resolvers with distinct roles:
 
-**dns-steer (dnsmasq, port 53)** — Used by the Tailscale container as its system resolver. Split-horizon: returns the ingress address(es) from `INGRESS_IP` for all domains, except Tailscale infrastructure (`tailscale.com`, `tailscale.io`, `ts.net`) which is forwarded to Unbound for real answers. Returns A records for IPv4 ingress addresses and AAAA for IPv6 automatically, based on the address family.
+**dns-steer (dnsmasq, port 53)** — Used by the Tailscale container as its system resolver. Split-horizon: returns `INGRESS_IP` for any query it receives, except Tailscale infrastructure (`tailscale.com`, `tailscale.io`, `ts.net`) which is forwarded to Unbound for real answers. Returns A records for IPv4 ingress addresses and AAAA for IPv6 automatically, based on the address family.
 
 When the App Connector receives a peerapi DNS query from a client for a configured domain, it resolves via dnsmasq-steer, gets `INGRESS_IP`, and Tailscale advertises the ingress CIDRs as subnet routes.
 
@@ -275,7 +275,7 @@ If HAProxy resolved through dnsmasq-steer, it would receive `INGRESS_IP` for eve
 
 ## Trust model
 
-**SNI allowlist (policy-sync).** The `appc-policy-sync` sidecar reads domain assignments from Tailscale's LocalAPI (`Self.CapMap["tailscale.com/app-connectors"]`) and generates HAProxy ACL files. Only SNIs matching admin-console-configured domains are forwarded. On cold start, empty ACL files mean deny-all until policy-sync populates them (typically < 30s).
+**SNI allowlist (policy-sync).** The `appc-policy-sync` sidecar reads domain assignments from Tailscale's LocalAPI (`Self.CapMap["tailscale.com/app-connectors"]`) and generates HAProxy ACL files. Only SNIs matching admin-console-configured domains are forwarded — all others are rejected. On cold start, empty ACL files mean deny-all until policy-sync populates them (typically < 30s).
 
 Without `CONNECTOR_TAG`, the stack unions all local connector tags to determine which CapMap entries apply. Set `CONNECTOR_TAG` to narrow enforcement to specific tags when the node carries multiple.
 
@@ -293,7 +293,7 @@ Without `CONNECTOR_TAG`, the stack unions all local connector tags to determine 
 | `fe80::/10` | IPv6 link-local |
 | `ff00::/8` | IPv6 multicast |
 
-`100.64.0.0/10` and `fd7a:115c:a1e0::/48` are denied by default to prevent an allowed SNI from resolving to a tailnet peer IP and bypassing Tailscale's own ACLs through this gateway. Note: `100.64.0.0/10` is the IANA CGNAT range, not exclusively Tailscale's — enterprises using CGNAT space for their own infrastructure would have those destinations blocked too.
+`100.64.0.0/10` and `fd7a:115c:a1e0::/48` are denied by default to prevent an allowed SNI from resolving to a tailnet peer IP and enabling unintended access to internal services through this gateway. Note: `100.64.0.0/10` is the IANA CGNAT range, not exclusively Tailscale's — enterprises using CGNAT space for their own infrastructure would have those destinations blocked too.
 
 `EXTRA_DENY_CIDRS` is **additive only** — it cannot remove static ranges. To allow forwarding to tailnet peers or non-Tailscale CGNAT destinations, remove the relevant range from the static base — see *Operator overrides* below.
 

@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Lint / Build / Render / Validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ----------------------------------------------------------------
+      # Shell lint
+      # Note: appc-interception is shellcheck-only. nftables/TPROXY requires
+      # live kernel support and CAP_NET_ADMIN — functional tests need a real
+      # Linux host with kernel capabilities.
+      # ----------------------------------------------------------------
+      - name: Install shellcheck
+        run: sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: shellcheck
+        run: |
+          shellcheck config-render/render.sh
+          shellcheck policy-sync/sync.sh
+          shellcheck interception/setup.sh
+          shellcheck proxy/start.sh
+
+      # ----------------------------------------------------------------
+      # Compose config validation
+      # ----------------------------------------------------------------
+      - name: docker compose config
+        env:
+          INGRESS_IP: 10.99.0.1/32
+          TS_AUTHKEY: ci-placeholder
+          TS_HOSTNAME: ci-test
+        run: docker compose config > /dev/null
+
+      # ----------------------------------------------------------------
+      # Build all custom images
+      # ----------------------------------------------------------------
+      - name: Build appc-config-render
+        run: docker build -t appc-config-render ./config-render
+
+      - name: Build appc-dns-steer
+        run: docker build -t appc-dns-steer ./dns-steer
+
+      - name: Build appc-dns-upstream
+        run: docker build -t appc-dns-upstream ./dns-upstream
+
+      - name: Build appc-interception
+        run: docker build -t appc-interception ./interception
+
+      - name: Build appc-policy-sync
+        run: docker build -t appc-policy-sync ./policy-sync
+
+      # ----------------------------------------------------------------
+      # Render matrix + config validation
+      # ----------------------------------------------------------------
+      - name: Pull haproxy image for config check
+        run: docker pull haproxy:3.2.14-alpine
+
+      - name: Render matrix and config validation
+        run: bash tests/render-test.sh

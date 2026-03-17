@@ -426,6 +426,7 @@ The following have been validated through manual testing. This repo does not yet
 - **Tailscale restart gap.** If `appc-ts` restarts, all shared-netns services (`appc-interception`, `appc-proxy`, `appc-dns-steer`, `appc-dns-upstream`) lose their network namespace reference. `appc-interception` and `appc-proxy` detect this via watchdog and self-exit, triggering Docker's `restart: unless-stopped`. `appc-dns-steer` and `appc-dns-upstream` rely on Docker's own restart policy without active detection — there is a brief window where DNS and proxy are unavailable.
 - **Same-node exit node incompatibility.** Using this gateway node as a Tailscale exit node simultaneously is unsupported. The catch-all DNS steering returns `INGRESS_IP` for all domains — this conflicts with the full-tunnel DNS resolution expected of an exit node and will break generic internet routing.
 - **Linux only.** TPROXY requires Linux kernel support. Does not run on macOS or Windows.
+- **`appc-interception` CI coverage is shellcheck only.** nftables TPROXY setup requires a live Linux host with `CAP_NET_ADMIN` — it cannot be validated in standard CI environments.
 
 ## Operator overrides
 

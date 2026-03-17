@@ -1,0 +1,58 @@
+name: Publish images
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    name: Build and push ${{ matrix.service }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: config-render
+            context: ./config-render
+          - service: dns-steer
+            context: ./dns-steer
+          - service: dns-upstream
+            context: ./dns-upstream
+          - service: interception
+            context: ./interception
+          - service: policy-sync
+            context: ./policy-sync
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # GHCR image names must be lowercase. github.repository may contain
+      # uppercase characters if the owner or repo name does.
+      - name: Normalize repository name to lowercase
+        id: repo-lower
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push appc-${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: |
+            ghcr.io/${{ steps.repo-lower.outputs.name }}/appc-${{ matrix.service }}:${{ github.sha }}
+            ${{ startsWith(github.ref, 'refs/tags/') && format('ghcr.io/{0}/appc-{1}:{2}', steps.repo-lower.outputs.name, matrix.service, github.ref_name) || '' }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}

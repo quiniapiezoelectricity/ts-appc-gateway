@@ -312,7 +312,9 @@ while true; do
     # Failure or empty result on a successful fetch = fail closed (clear ACLs),
     # not keep-last-known-good. Tag removal is an explicit admin action.
     _effective_tags=""
-    _tag_err=$(get_effective_tags "$_status" 2>&1) && _effective_tags="$_tag_err" || true
+    if _tag_err=$(get_effective_tags "$_status" 2>&1); then
+        _effective_tags="$_tag_err"
+    fi
 
     if [ -z "$_effective_tags" ]; then
         echo "    [warn] No effective tags — failing closed (treating as 0 domains)"

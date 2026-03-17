@@ -1,6 +1,6 @@
-# ts-appc-gateway
+# Tailscale App Connector Gateway
 
-A Tailscale App Connector gateway that routes TLS traffic by SNI hostname, not by IP.
+A Tailscale App Connector gateway that routes by hostname, not IP.
 
 ## The problem
 
@@ -100,11 +100,26 @@ App Connectors are available on all Tailscale plans.
 
 ## Quick start
 
+**Deploy (pull from GHCR):**
+
+Images are published to GHCR by CI on every push to `main`. The deploy path requires those images to be available — if you are working from a fresh fork, run the develop path below until CI has published at least once.
+
 ```sh
 cp .env.example .env
 # Edit .env: set INGRESS_IP and TS_AUTHKEY at minimum
-docker compose build
-docker compose up
+docker compose pull
+docker compose up -d
+```
+
+To update to a newer build: `docker compose pull && docker compose up -d`.
+
+**Develop / build from source:**
+
+```sh
+cp .env.example .env
+# Edit .env: set INGRESS_IP and TS_AUTHKEY at minimum
+docker compose -f docker-compose.yml -f docker-compose.build.yml build
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
 ```
 
 Watch startup:

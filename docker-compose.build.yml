@@ -1,0 +1,28 @@
+# Build overlay for local development.
+# Use with: docker compose -f docker-compose.yml -f docker-compose.build.yml build
+#           docker compose -f docker-compose.yml -f docker-compose.build.yml up -d
+#
+# Overrides the GHCR image: defaults in docker-compose.yml with locally-built
+# images. image: gives each build a predictable local name that Compose uses
+# for both build output and container references.
+
+services:
+  appc-config-render:
+    build: ./config-render
+    image: appc-config-render
+
+  appc-dns-upstream:
+    build: ./dns-upstream
+    image: appc-dns-upstream
+
+  appc-dns-steer:
+    build: ./dns-steer
+    image: appc-dns-steer
+
+  appc-interception:
+    build: ./interception
+    image: appc-interception
+
+  appc-policy-sync:
+    build: ./policy-sync
+    image: appc-policy-sync

@@ -7,7 +7,7 @@ services:
   # ============================================================
   appc-config-render:
     container_name: appc-config-render
-    build: ./config-render
+    image: ${CONFIG_RENDER_IMAGE:-ghcr.io/quiniapiezoelectricity/ts-appc-gateway/appc-config-render:main}
     cap_drop: [ALL]
     read_only: true
     environment:
@@ -38,7 +38,7 @@ services:
   # ============================================================
   appc-dns-upstream:
     container_name: appc-dns-upstream
-    build: ./dns-upstream
+    image: ${DNS_UPSTREAM_IMAGE:-ghcr.io/quiniapiezoelectricity/ts-appc-gateway/appc-dns-upstream:main}
     command: ["unbound", "-d", "-c", "/config/unbound.conf"]
     network_mode: service:appc-ts
     cap_drop: [ALL]
@@ -137,7 +137,7 @@ services:
   # ============================================================
   appc-dns-steer:
     container_name: appc-dns-steer
-    build: ./dns-steer
+    image: ${DNS_STEER_IMAGE:-ghcr.io/quiniapiezoelectricity/ts-appc-gateway/appc-dns-steer:main}
     command: ["dnsmasq", "--conf-file=/config/dnsmasq-steer.conf", "--no-daemon"]
     network_mode: service:appc-ts
     cap_drop: [ALL]
@@ -172,7 +172,7 @@ services:
   # ============================================================
   appc-interception:
     container_name: appc-interception
-    build: ./interception
+    image: ${INTERCEPTION_IMAGE:-ghcr.io/quiniapiezoelectricity/ts-appc-gateway/appc-interception:main}
     network_mode: service:appc-ts
     privileged: true
     environment:
@@ -248,7 +248,7 @@ services:
   # ============================================================
   appc-policy-sync:
     container_name: appc-policy-sync
-    build: ./policy-sync
+    image: ${POLICY_SYNC_IMAGE:-ghcr.io/quiniapiezoelectricity/ts-appc-gateway/appc-policy-sync:main}
     cap_drop: [ALL]
     read_only: true
     tmpfs:

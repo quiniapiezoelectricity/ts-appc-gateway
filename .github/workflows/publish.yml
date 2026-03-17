@@ -57,6 +57,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ steps.repo-lower.outputs.name }}/appc-${{ matrix.service }}:${{ github.sha }}
-            ${{ startsWith(github.ref, 'refs/tags/') && format('ghcr.io/{0}/appc-{1}:{2}', steps.repo-lower.outputs.name, matrix.service, github.ref_name) || '' }}
+            ${{ github.ref_type == 'branch' && format('ghcr.io/{0}/appc-{1}:main', steps.repo-lower.outputs.name, matrix.service) || '' }}
+            ${{ github.ref_type == 'tag' && format('ghcr.io/{0}/appc-{1}:{2}', steps.repo-lower.outputs.name, matrix.service, github.ref_name) || '' }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}

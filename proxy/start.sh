@@ -21,6 +21,9 @@ haproxy -W -f /config/haproxy.cfg &
 _pid=$!
 
 echo "==> appc-proxy: HAProxy started (pid ${_pid})"
+if [ -f /run/appc/unsafe-mode ]; then
+    echo "WARNING: gateway is running in UNSAFE mode — SNI enforcement or config render disabled" >&2
+fi
 echo "==> appc-proxy: watching tailscale0..."
 
 # Watchdog: exit when tailscale0 disappears or HAProxy dies

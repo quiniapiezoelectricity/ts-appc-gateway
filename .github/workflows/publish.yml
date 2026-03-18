@@ -13,6 +13,8 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write
+  attestations: write
 
 jobs:
   build-push:
@@ -52,6 +54,7 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       - name: Build and push appc-${{ matrix.service }}
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -62,3 +65,10 @@ jobs:
             ${{ github.ref_type == 'tag' && format('ghcr.io/{0}/appc-{1}:{2}', steps.repo-lower.outputs.name, matrix.service, github.ref_name) || '' }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/${{ steps.repo-lower.outputs.name }}/appc-${{ matrix.service }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true

@@ -227,6 +227,18 @@ fi
 # ----------------------------------------------------------------
 APPC_RUN=/run/appc
 
+# Unsafe-mode marker — written when any safety override is active so other
+# services (e.g. appc-proxy) can detect and log the degraded state.
+if [ "${SKIP_SNI_ENFORCEMENT:-0}" = "1" ] || \
+   [ -n "${SKIP_HAPROXY_RENDER:-}" ] || \
+   [ -n "${SKIP_DNSMASQ_RENDER:-}" ] || \
+   [ -n "${SKIP_UNBOUND_RENDER:-}" ]; then
+    touch "${APPC_RUN}/unsafe-mode"
+    echo "    [warn] unsafe-mode marker written to ${APPC_RUN}/unsafe-mode"
+else
+    rm -f "${APPC_RUN}/unsafe-mode"
+fi
+
 # SNI allowlists: seed ONLY IF MISSING — preserve last-known-good
 # across stack restarts. Empty = deny-all on first boot only.
 if [ ! -f "${APPC_RUN}/allowed-snis-exact.acl" ]; then

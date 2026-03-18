@@ -83,10 +83,32 @@ _run_case() {
 # ----------------------------------------------------------------
 printf '==> Render pass cases\n'
 _run_case "ipv4-only"      pass "INGRESS_IP=10.99.0.1/32"
+if [ ! -f "${_run_appc}/unsafe-mode" ]; then
+    printf 'ok    ipv4-only: unsafe-mode marker absent\n'
+    _pass=$((_pass + 1))
+else
+    printf 'FAIL  ipv4-only: unsafe-mode marker present (should be absent)\n'
+    _fail=$((_fail + 1))
+fi
 _run_case "ipv6-only"      pass "INGRESS_IP=2001:db8::1/128"
 _run_case "dual-stack"     pass "INGRESS_IP=10.99.0.1/32,2001:db8::1/128"
 _run_case "multi-v4"       pass "INGRESS_IP=10.99.0.1/32,10.99.0.2/32"
 _run_case "open-mode"      pass "INGRESS_IP=10.99.0.1/32" "SKIP_SNI_ENFORCEMENT=1"
+if [ -f "${_run_appc}/unsafe-mode" ]; then
+    printf 'ok    open-mode: unsafe-mode marker present\n'
+    _pass=$((_pass + 1))
+else
+    printf 'FAIL  open-mode: unsafe-mode marker missing\n'
+    _fail=$((_fail + 1))
+fi
+_run_case "skip-render"    pass "INGRESS_IP=10.99.0.1/32" "SKIP_HAPROXY_RENDER=1"
+if [ -f "${_run_appc}/unsafe-mode" ]; then
+    printf 'ok    skip-render: unsafe-mode marker present\n'
+    _pass=$((_pass + 1))
+else
+    printf 'FAIL  skip-render: unsafe-mode marker missing\n'
+    _fail=$((_fail + 1))
+fi
 _run_case "egress-ipv6"    pass "INGRESS_IP=10.99.0.1/32" "EGRESS_ACCEPT_FAMILY=ipv6" "EGRESS_PREFER_FAMILY=ipv6"
 _run_case "egress-dual-none" pass "INGRESS_IP=10.99.0.1/32" "EGRESS_ACCEPT_FAMILY=dual" "EGRESS_PREFER_FAMILY=none"
 

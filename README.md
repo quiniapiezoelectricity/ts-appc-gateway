@@ -111,7 +111,7 @@ docker compose pull
 docker compose up -d
 ```
 
-To update to a newer build: `docker compose pull && docker compose up -d`.
+To update to a newer build: `docker compose pull && docker compose up -d`. The default images use the `:main` floating tag; for production deployments pin to a specific SHA or semver tag via the `*_IMAGE` env vars documented in `.env.example`.
 
 **Develop / build from source:**
 

@@ -174,7 +174,10 @@ services:
     container_name: appc-interception
     image: ${INTERCEPTION_IMAGE:-ghcr.io/quiniapiezoelectricity/ts-appc-gateway/appc-interception:main}
     network_mode: service:appc-ts
-    privileged: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
     environment:
       INGRESS_IP: ${INGRESS_IP}
       TPROXY_PORT: ${TPROXY_PORT:-10443}
